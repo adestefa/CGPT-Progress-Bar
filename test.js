@@ -1,210 +1,260 @@
+// TOKEN COUNTER WITH FLOATING PROGRESS BAR
 (function() {
+    console.log("ChatGPT Token Counter Extension Loaded");
+
     const TC = {
-        ver: "1.6",
-        promptSelector: '#prompt-textarea', 
-        responseSelector: '.markdown',
-        modelSelector: 'span.text-token-text-secondary', 
-        words: [],
-        tokens: [],
-        tokenLimit: 8192, 
-        updateInterval: 5000, 
-        progressBarId: 'token-progress-container',
+        ver             : "3.0",
+        prompts         : [],
+        responses       : [],
+        words           : [],
+        tokens          : [],
+        len             : 0,
+        token_limit     : 8192,
+        update_interval : 5000, // Update every 5 seconds
 
-        init: function() {
-            this.promptElement = document.querySelector(this.promptSelector);
-            this.responseElements = document.querySelectorAll(this.responseSelector);
-            this.len = this.responseElements.length;
-
-            if (this.promptElement) {
-                this.promptElement.addEventListener('input', this.run.bind(this));
-            }
-
-            this.insertProgressBar(); // Insert the progress bar into the page
-            this.run();
+        init : function() {
+            console.log("Initializing Token Counter");
+            // Update selectors based on actual class names
+            this.prompts = document.querySelectorAll('.user-message .message-content');
+            this.responses = document.querySelectorAll('.assistant-message .message-content');
+            this.len = Math.min(this.prompts.length, this.responses.length);
+            console.log(`Found ${this.prompts.length} prompt(s) and ${this.responses.length} response(s).`);
+            this.createProgressBar();
+            this.run(); // Initial run
             this.startAutoUpdate();
-            this.setupModelObserver();
+            this.observeMutations();
         },
 
-        run: function() {
+        run : function () {
+            console.log("Running Token Counter");
             this.words = [];
             this.tokens = [];
-            let promptWords = 0, responseWords = 0;
-            let promptTokens = 0, responseTokens = 0;
+            let p_total_words = 0;
+            let r_total_words = 0;
+            let p_total_tokens = 0;
+            let r_total_tokens = 0;
 
-            if (this.promptElement) {
-                const pw = this.countWords(this.promptElement.value || this.promptElement.innerText);
-                promptWords += pw;
-                this.words.push(pw);
-                const pt = this.estimateTokens(pw);
-                promptTokens += pt;
-                this.tokens.push(pt);
+            console.log(`Found ${this.prompts.length} prompt(s) and ${this.responses.length} response(s).`);
+
+            for (let i = 0; i < this.len; i++) {
+                
+                // Count number of words in prompt and response
+                let promptTextwords = this.countWords(this.prompts[i].innerText);
+                let responseTextwords = this.countWords(this.responses[i].innerText);
+                p_total_words += promptTextwords;
+                r_total_words += responseTextwords;
+
+                this.words.push(promptTextwords, responseTextwords);
+
+                // Estimate tokens for the word count in both
+                let promptTokens = this.estimateTokens(promptTextwords);
+                let responseTokens = this.estimateTokens(responseTextwords);
+                p_total_tokens += promptTokens;
+                r_total_tokens += responseTokens;
+                this.tokens.push(promptTokens, responseTokens);
             }
 
-            this.responseElements = document.querySelectorAll(this.responseSelector);
-            this.len = this.responseElements.length;
+            const final = {
+                "prompts" : {
+                    "words" :  p_total_words,
+                    "tokens" : p_total_tokens
+                },
+                "responses" : {
+                    "words" :  r_total_words,
+                    "tokens" : r_total_tokens
+                },
+                "totals" : {
+                    "words"         : (p_total_words + r_total_words),
+                    "tokens"        : (p_total_tokens + r_total_tokens),
+                    "maxresponse"   : 0
+                },
+            }
+            final.totals.maxresponse = (this.token_limit - final.totals.tokens);
 
-            this.responseElements.forEach(response => {
-                const rw = this.countWords(response.innerText);
-                responseWords += rw;
-                this.words.push(rw);
-                const rt = this.estimateTokens(rw);
-                responseTokens += rt;
-                this.tokens.push(rt);
-            });
+            // Update Progress Bar
+            this.updateProgressBar(final.totals.tokens, final.totals.maxresponse);
 
-            const totals = {
-                usedTokens: promptTokens + responseTokens,
-                maxTokens: this.tokenLimit,
-                remainingTokens: Math.max(this.tokenLimit - (promptTokens + responseTokens), 0)
-            };
-
-            this.updateProgressBar(totals.usedTokens, totals.maxTokens, totals.remainingTokens);
+            // Optional: Log details to console
+            console.dir(final);
+            console.log("Total Words: " + final.totals.words);
+            console.log("Total Tokens: " + final.totals.tokens);
+            console.log("Max Response Tokens: " + final.totals.maxresponse);
         },
 
-        estimateTokens: function(wordCount) {
+        estimateTokens : function(wordCount) {
             const averageTokensPerWord = 1.33;
             return Math.round(wordCount * averageTokensPerWord);
         },
 
-        countWords: function(str) {
+        countWords : function(str) {
+            // Trim the string to remove leading and trailing spaces
             str = str.trim();
-            if (str === "") return 0;
+            // If the string is empty, return 0
+            if (str === "") {
+                return 0;
+            }
+             /**
+             * Explanation of the regex:
+             * \b           - Word boundary
+             * [A-Za-z0-9]+ - One or more alphanumeric characters
+             * (?:['-][A-Za-z0-9]+)* - Non-capturing group for contractions or hyphenated words
+             * \b           - Word boundary
+             */
             const words = str.match(/\b[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*\b/g);
-            return words ? words.length : 0;
-        },
 
-        insertProgressBar: function() {
-            if (document.getElementById(this.progressBarId)) return;
-
-            const targetDiv = document.querySelector('.w-full');
-            if (!targetDiv) {
-                console.warn("Unable to find the target div with class 'w-full'.");
-                return;
+            // If no matches found, return 0
+            if (words === null) {
+                return 0;
             }
 
+            return words.length;
+        },
+
+        // Create the floating progress bar elements
+        createProgressBar: function() {
+            console.log("Creating Progress Bar");
+            // Avoid creating multiple progress bars
+            if (document.getElementById('token-progress-container')) return;
+
+            // Create container
             this.progressContainer = document.createElement('div');
-            this.progressContainer.id = this.progressBarId;
+            this.progressContainer.id = 'token-progress-container';
             Object.assign(this.progressContainer.style, {
-                width: '100%',
-                height: '20px',
+                position: 'fixed',
+                bottom: '20px',
+                right: '20px',
+                width: '250px',
                 padding: '10px',
-                backgroundColor: '#f3f4f6',
-                color: '#333',
-                borderRadius: '6px',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                color: '#fff',
+                borderRadius: '8px',
                 fontFamily: 'Arial, sans-serif',
                 fontSize: '14px',
-                marginBottom: '10px',
-                textAlign: 'center',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                zIndex: '10000',
+                boxShadow: '0 4px 8px rgba(0,0,0,0.2)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center'
             });
 
+            // Create title
             const title = document.createElement('div');
-            title.innerHTML = '<b>Token Usage</b>';
-            Object.assign(title.style, { marginBottom: '5px' });
+            title.innerText = 'ChatGPT Token Usage';
+            Object.assign(title.style, {
+                marginBottom: '8px',
+                fontWeight: 'bold'
+            });
             this.progressContainer.appendChild(title);
 
+            // Create progress bar background
             this.progressBarBackground = document.createElement('div');
             Object.assign(this.progressBarBackground.style, {
                 width: '100%',
-                height: '12px',
+                height: '20px',
                 backgroundColor: '#ddd',
-                borderRadius: '6px',
+                borderRadius: '10px',
                 overflow: 'hidden',
-                marginBottom: '5px'
+                marginBottom: '8px'
             });
             this.progressContainer.appendChild(this.progressBarBackground);
 
+            // Create progress bar fill
             this.progressBarFill = document.createElement('div');
             Object.assign(this.progressBarFill.style, {
                 height: '100%',
                 width: '0%',
                 backgroundColor: '#4caf50',
-                borderRadius: '6px 0 0 6px',
-                transition: 'width 0.5s ease, background-color 0.5s ease'
+                borderRadius: '10px 0 0 10px',
+                transition: 'width 0.5s ease'
             });
             this.progressBarBackground.appendChild(this.progressBarFill);
 
+            // Create text info
             this.progressText = document.createElement('div');
-            this.progressText.innerText = `0 / ${this.tokenLimit} tokens | Remaining: ${this.tokenLimit}`;
-            Object.assign(this.progressText.style, { fontSize: '12px' });
+            this.progressText.innerText = '0 / ' + this.token_limit + ' tokens';
+            Object.assign(this.progressText.style, {
+                fontSize: '12px'
+            });
             this.progressContainer.appendChild(this.progressText);
 
-            targetDiv.prepend(this.progressContainer);
+            // Append the container to the body
+            document.body.appendChild(this.progressContainer);
         },
 
-        updateProgressBar: function(used, max, remaining) {
-            let percentage = (used / max) * 100;
-            if (percentage > 100) percentage = 100;
-            this.progressBarFill.style.width = `${percentage}%`;
+        // Update the progress bar based on tokens used
+        updateProgressBar: function(used, remaining) {
+            console.log(`Updating Progress Bar: ${used} / ${this.token_limit} tokens`);
+            const percentage = Math.min((used / this.token_limit) * 100, 100);
+            this.progressBarFill.style.width = percentage + '%';
 
+            // Change color based on usage
             if (percentage < 50) {
-                this.progressBarFill.style.backgroundColor = '#4caf50';
+                this.progressBarFill.style.backgroundColor = '#4caf50'; // Green
             } else if (percentage < 80) {
-                this.progressBarFill.style.backgroundColor = '#ff9800';
+                this.progressBarFill.style.backgroundColor = '#ff9800'; // Orange
             } else {
-                this.progressBarFill.style.backgroundColor = '#f44336';
+                this.progressBarFill.style.backgroundColor = '#f44336'; // Red
             }
 
-            this.progressText.innerText = `${used} / ${max} tokens | Remaining: ${remaining}`;
+            // Update text
+            this.progressText.innerText = `${used} / ${this.token_limit} tokens`;
         },
 
+        // Start automatic updates at specified intervals
         startAutoUpdate: function() {
-            setInterval(() => {
+            console.log(`Starting auto-update every ${this.update_interval / 1000} seconds`);
+            this.updateIntervalId = setInterval(() => {
+                console.log("Auto-updating token count");
                 this.run();
-            }, this.updateInterval);
+            }, this.update_interval);
         },
 
-        setupModelObserver: function() {
-            const observer = new MutationObserver(() => this.detectModelAndSetLimit());
-            observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-            this.detectModelAndSetLimit();
-        },
+        // Observe DOM mutations to update token count dynamically
+        observeMutations: function() {
+            console.log("Setting up MutationObserver");
+            const targetNode = document.body;
+            const config = { childList: true, subtree: true };
 
-        detectModelAndSetLimit: function() {
-            const modelElements = document.querySelectorAll('span.text-token-text-secondary');
-
-            if (modelElements.length > 1) {
-                const modelName = modelElements[1].innerText.toLowerCase();
-                console.log("Model found: " + modelName);
-
-                const modelTokenMap = {
-                    '4o': 8192,
-                    'o1-mini': 64000,
-                    'o1': 32000
-                };
-
-                let newTokenLimit = this.tokenLimit;
-                for (const [model, limit] of Object.entries(modelTokenMap)) {
-                    if (modelName.indexOf(model.toLowerCase()) !== -1) {
-                        console.log(modelName + " Found!");
-                        newTokenLimit = limit;
-                        break;
+            const callback = (mutationsList) => {
+                for (let mutation of mutationsList) {
+                    if (mutation.type === 'childList') {
+                        console.log("DOM mutation detected, running token counter");
+                        this.run();
                     }
                 }
+            };
 
-                if (newTokenLimit !== this.tokenLimit) {
-                    this.tokenLimit = newTokenLimit;
-                    this.updateProgressBarDisplay();
-                    this.run();
-                }
-            } else {
-                console.warn("Unable to find the model name using the provided selector.");
-            }
+            this.observer = new MutationObserver(callback);
+            this.observer.observe(targetNode, config);
         },
 
-        updateProgressBarDisplay: function() {
-            if (this.progressText) {
-                const currentText = this.progressText.innerText;
-                const usedTokensMatch = currentText.match(/^(\d+)\s*\/\s*\d+\s*tokens/);
-                let usedTokens = 0;
-                if (usedTokensMatch && usedTokensMatch[1]) {
-                    usedTokens = parseInt(usedTokensMatch[1], 10);
-                }
-                let remainingTokens = Math.max(this.tokenLimit - usedTokens, 0);
-                this.progressText.innerText = `${usedTokens} / ${this.tokenLimit} tokens | Remaining: ${remainingTokens}`;
+        // Clean up when the page is unloaded or the extension is disabled
+        cleanup: function() {
+            console.log("Cleaning up Token Counter");
+            if (this.progressContainer) {
+                this.progressContainer.remove();
+            }
+            if (this.updateIntervalId) {
+                clearInterval(this.updateIntervalId);
+            }
+            if (this.observer) {
+                this.observer.disconnect();
             }
         }
-    };
+    }
 
-    TC.init();
+    // Initialize the Token Counter when the DOM is fully loaded
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log("DOM fully loaded, initializing Token Counter");
+            TC.init();
+        });
+    } else {
+        console.log("DOM already loaded, initializing Token Counter");
+        TC.init();
+    }
+
+    // Optional: Clean up when the page is unloaded
+    window.addEventListener('beforeunload', () => TC.cleanup());
+
 })();
